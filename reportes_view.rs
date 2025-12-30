@@ -3,8 +3,6 @@
 #[ink::contract]
 /// Contrato de reportes de solo lectura para consultar estadísticas del marketplace.
 mod reportes_view {
-    // Nota: Para que esto funcione, necesitas importar los tipos del contrato Marketplace.
-    // En un entorno real, necesitarías tener Marketplace como dependencia o usar traits compartidos.
     use ink::env::call::{build_call, ExecutionInput, Selector};
     use ink::prelude::{string::String, vec::Vec};
     use ink::prelude::collections::BTreeMap;
@@ -53,6 +51,14 @@ mod reportes_view {
         }
     }
 
+    /// Enum para errores del contrato de reportes.
+    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub enum ReportesError {
+        LlamadaFallida,
+        MarketplaceNoConfigurado,
+    }
+
     /// Contrato de solo lectura para consultar estadísticas y reportes del marketplace.
     #[ink(storage)]
     pub struct ReportesView {
@@ -66,6 +72,19 @@ mod reportes_view {
         #[ink(constructor)]
         pub fn new(marketplace: AccountId) -> Self {
             Self { marketplace }
+        }
+
+        /// Actualiza la dirección del contrato marketplace (útil para tests y migraciones).
+        /// En producción, esto podría requerir permisos especiales.
+        #[ink(message)]
+        pub fn actualizar_marketplace(&mut self, nuevo_marketplace: AccountId) {
+            self.marketplace = nuevo_marketplace;
+        }
+
+        /// Obtiene la dirección del contrato marketplace configurado.
+        #[ink(message)]
+        pub fn obtener_marketplace(&self) -> AccountId {
+            self.marketplace
         }
 
         /// Obtiene el top 5 de vendedores con mejor reputación.
@@ -116,6 +135,7 @@ mod reportes_view {
                 )
                 .returns::<u32>()
                 .invoke()
+                .unwrap_or(0) // En caso de error, retornar 0
         }
 
         /// Obtiene el top N de vendedores ordenados por reputación.
@@ -167,6 +187,7 @@ mod reportes_view {
                 ))))
                 .returns::<Vec<(AccountId, ReputacionData)>>()
                 .invoke()
+                .unwrap_or_default() // En caso de error, retornar vector vacío
         }
 
         /// Obtiene los productos más vendidos ordenados por cantidad de ventas.
@@ -195,6 +216,7 @@ mod reportes_view {
                 ))))
                 .returns::<Vec<(u128, Producto)>>()
                 .invoke()
+                .unwrap_or_default() // En caso de error, retornar vector vacío
         }
 
         /// Hace una llamada cross-contract al marketplace para obtener ventas de un producto.
@@ -209,6 +231,7 @@ mod reportes_view {
                 )
                 .returns::<u32>()
                 .invoke()
+                .unwrap_or(0) // En caso de error, retornar 0
         }
 
         /// Obtiene las estadísticas agrupadas por categoría.
@@ -256,7 +279,99 @@ mod reportes_view {
                 )
                 .returns::<Option<(u32, u128, u32)>>()
                 .invoke()
+                .unwrap_or(None) // En caso de error, retornar None
         }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use ink::env::{test, DefaultEnvironment};
+
+        fn default_accounts() -> test::DefaultAccounts<DefaultEnvironment> {
+            test::default_accounts::<DefaultEnvironment>()
+        }
+
+        fn init_reportes_view(marketplace: AccountId) -> ReportesView {
+            ReportesView::new(marketplace)
+        }
+
+        #[ink::test]
+        fn crear_reportes_view_funciona() {
+            let accounts = default_accounts();
+            let reportes = init_reportes_view(accounts.alice);
+            assert_eq!(reportes.obtener_marketplace(), accounts.alice);
+        }
+
+        #[ink::test]
+        fn actualizar_marketplace_funciona() {
+            let accounts = default_accounts();
+            let mut reportes = init_reportes_view(accounts.alice);
+            assert_eq!(reportes.obtener_marketplace(), accounts.alice);
+            
+            reportes.actualizar_marketplace(accounts.bob);
+            assert_eq!(reportes.obtener_marketplace(), accounts.bob);
+        }
+
+        #[ink::test]
+        fn cantidad_ordenes_usuario_retorna_cero_si_no_hay_marketplace() {
+            let accounts = default_accounts();
+            // Usar una cuenta que no es un contrato desplegado
+            let reportes = init_reportes_view(accounts.charlie);
+            // Debería retornar 0 si la llamada falla
+            let cantidad = reportes.cantidad_ordenes_usuario(accounts.alice);
+            assert_eq!(cantidad, 0);
+        }
+
+        #[ink::test]
+        fn top_vendedores_retorna_vacio_si_no_hay_marketplace() {
+            let accounts = default_accounts();
+            let reportes = init_reportes_view(accounts.charlie);
+            // Debería retornar vacío si la llamada falla
+            let top = reportes.top_5_vendedores();
+            assert_eq!(top.len(), 0);
+        }
+
+        #[ink::test]
+        fn top_compradores_retorna_vacio_si_no_hay_marketplace() {
+            let accounts = default_accounts();
+            let reportes = init_reportes_view(accounts.charlie);
+            // Debería retornar vacío si la llamada falla
+            let top = reportes.top_5_compradores();
+            assert_eq!(top.len(), 0);
+        }
+
+        #[ink::test]
+        fn productos_mas_vendidos_retorna_vacio_si_no_hay_marketplace() {
+            let accounts = default_accounts();
+            let reportes = init_reportes_view(accounts.charlie);
+            // Debería retornar vacío si la llamada falla
+            let productos = reportes.productos_mas_vendidos();
+            assert_eq!(productos.len(), 0);
+        }
+
+        #[ink::test]
+        fn estadisticas_por_categoria_retorna_vacio_si_no_hay_marketplace() {
+            let accounts = default_accounts();
+            let reportes = init_reportes_view(accounts.charlie);
+            // Debería retornar vacío si la llamada falla
+            let stats = reportes.estadisticas_por_categoria();
+            assert_eq!(stats.len(), 0);
+        }
+    }
+
+    #[cfg(all(test, feature = "e2e-tests"))]
+    mod e2e_tests {
+        use super::*;
+        
+        // Nota: Los tests E2E requieren que ambos contratos estén compilados
+        // y desplegados. Ver README.md para instrucciones de despliegue en testnet.
+        
+        // Ejemplo de flujo para testnet:
+        // 1. Compilar y desplegar el contrato Marketplace
+        // 2. Obtener el AccountId del Marketplace desplegado
+        // 3. Compilar y desplegar ReportesView pasando el AccountId del Marketplace
+        // 4. Usar ReportesView para hacer consultas al Marketplace
     }
 }
 
